@@ -32,7 +32,7 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android16-6.12 --depth=1
           repo sync -c -j$(nproc) --no-tags
 
-      - name: Checkout Commit & Create Full Arsenal Defconfig Fragment
+      - name: Checkout Commit & Register Full Arsenal Bazel Fragment
         run: |
           cd ~/gki/common
           git fetch --depth=50 origin b575a0b6e647 || true
@@ -40,11 +40,9 @@ jobs:
 
           sed -i '/CONFIG_LOCALVERSION/d' arch/arm64/configs/gki_defconfig
 
-          cat << 'EOF' > ~/full_arsenal.fragment
+          cat << 'EOF' > full_arsenal.fragment
           CONFIG_LOCALVERSION="-android16-5-gb575a0b6e647-ab14355190-4k"
           # CONFIG_LOCALVERSION_AUTO is not set
-
-          # Wi-Fi Monitor & Packet Injection (AR9271, RT2800, MT7612U)
           CONFIG_CFG80211=m
           CONFIG_CFG80211_WEXT=y
           CONFIG_MAC80211=m
@@ -56,15 +54,11 @@ jobs:
           CONFIG_ATH9K_COMMON=m
           CONFIG_ATH9K_HTC=m
           CONFIG_WLAN_VENDOR_RALINK=y
-          CONFIG_RT2X00=m
+          CONFIG_RT2X00=y
           CONFIG_RT2800USB=m
           CONFIG_WLAN_VENDOR_MEDIATEK=y
           CONFIG_MT76x2U=m
-
-          # USB HID / DuckHunter Gadget
           CONFIG_USB_CONFIGFS_F_HID=m
-
-          # Bluetooth Arsenal (External USB BT Dongles)
           CONFIG_BT=m
           CONFIG_BT_BREDR=y
           CONFIG_BT_RFCOMM=m
@@ -74,8 +68,6 @@ jobs:
           CONFIG_BT_BNEP_PROTO_FILTER=y
           CONFIG_BT_HIDP=m
           CONFIG_BT_HCIBTUSB=m
-
-          # CARsenal (CAN Bus) & Hardware Serial Adapters
           CONFIG_CAN=m
           CONFIG_CAN_RAW=m
           CONFIG_CAN_BCM=m
@@ -84,8 +76,6 @@ jobs:
           CONFIG_USB_SERIAL_CH341=m
           CONFIG_USB_SERIAL_CP210X=m
           CONFIG_USB_SERIAL_FTDI_SIO=m
-
-          # RTL-SDR Support
           CONFIG_MEDIA_SUPPORT=m
           CONFIG_MEDIA_DIGITAL_TV_SUPPORT=y
           CONFIG_DVB_USB=m
@@ -93,10 +83,19 @@ jobs:
           CONFIG_DVB_USB_RTL28XXU=m
           EOF
 
+          cat << 'EOF' >> BUILD.bazel
+
+          filegroup(
+              name = "full_arsenal",
+              srcs = ["full_arsenal.fragment"],
+              visibility = ["//visibility:public"],
+          )
+          EOF
+
       - name: Build Full Arsenal Kernel Modules with Kleaf
         run: |
           cd ~/gki
-          tools/bazel build --lto=thin --defconfig_fragment=$HOME/full_arsenal.fragment //common:kernel_aarch64_dist
+          tools/bazel build --lto=thin --defconfig_fragment=//common:full_arsenal //common:kernel_aarch64_dist
 
       - name: Download Firmware & Package KernelSU/Magisk Module
         run: |
@@ -104,18 +103,15 @@ jobs:
           mkdir -p ~/nh_arsenal/modules
           mkdir -p ~/nh_arsenal/system/vendor/firmware/ath9k_htc
 
-          # Copy all generated .ko modules from dist
           DIST=~/gki/out/android16-6.12/dist
           find "$DIST" -maxdepth 1 -name "*.ko" -exec cp {} ~/nh_arsenal/modules/ \;
 
-          # Fetch AR9271 & RT2800 firmware blobs
           curl -L https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/ath9k_htc/htc_9271-1.4.0.fw \
             -o ~/nh_arsenal/system/vendor/firmware/htc_9271.fw
           cp ~/nh_arsenal/system/vendor/firmware/htc_9271.fw ~/nh_arsenal/system/vendor/firmware/ath9k_htc/htc_9271-1.4.0.fw
           curl -L https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rt2870.bin \
             -o ~/nh_arsenal/system/vendor/firmware/rt2870.bin
 
-          # Installer binaries
           curl -L https://raw.githubusercontent.com/topjohnwu/Magisk/master/scripts/module_installer.sh \
             -o ~/nh_arsenal/META-INF/com/google/android/update-binary
           echo "#MAGISK" > ~/nh_arsenal/META-INF/com/google/android/updater-script
@@ -129,23 +125,16 @@ jobs:
           description=Wi-Fi Injection, USB HID DuckHunter, Bluetooth Arsenal, CARsenal & SDR modules for TECNO CL6k
           EOF
 
-          # Create loader script used by both service.sh and KernelSU Action button
           cat << 'EOF' > ~/nh_arsenal/load_arsenal.sh
           #!/system/bin/sh
           MODDIR=${0%/*}
-          echo "[*] Setting firmware path..."
           echo -n "$MODDIR/system/vendor/firmware" > /sys/module/firmware_class/parameters/path
-
-          echo "[*] Loading core dependencies..."
           for mod in rfkill.ko libarc4.ko cfg80211.ko mac80211.ko; do
             [ -f "$MODDIR/modules/$mod" ] && insmod "$MODDIR/modules/$mod" 2>/dev/null
           done
-
-          echo "[*] Loading Wi-Fi, HID, Bluetooth, CAN, and SDR modules..."
           for ko in "$MODDIR"/modules/*.ko; do
             insmod "$ko" 2>/dev/null
           done
-
           echo "[+] All NetHunter Arsenal modules loaded!"
           EOF
           chmod +x ~/nh_arsenal/load_arsenal.sh
