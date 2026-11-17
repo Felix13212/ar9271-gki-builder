@@ -1,10 +1,10 @@
-# ar9271-gki-buildername: Build AR9271 GKI 6.12.38 Modules
+name: Build Full NetHunter Arsenal (GKI 6.12.38)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-modules:
+  build-full-arsenal:
     runs-on: ubuntu-22.04
     steps:
       - name: Maximize Build Disk Space
@@ -32,15 +32,19 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android16-6.12 --depth=1
           repo sync -c -j$(nproc) --no-tags
 
-      - name: Checkout Exact Device Commit & Configure AR9271
+      - name: Checkout Commit & Create Full Arsenal Defconfig Fragment
         run: |
           cd ~/gki/common
           git fetch --depth=50 origin b575a0b6e647 || true
           git checkout b575a0b6e647 || echo "Using tip of common-android16-6.12"
-          
-          cat << 'EOF' >> arch/arm64/configs/gki_defconfig
+
+          sed -i '/CONFIG_LOCALVERSION/d' arch/arm64/configs/gki_defconfig
+
+          cat << 'EOF' > ~/full_arsenal.fragment
           CONFIG_LOCALVERSION="-android16-5-gb575a0b6e647-ab14355190-4k"
-          CONFIG_LOCALVERSION_AUTO=n
+          # CONFIG_LOCALVERSION_AUTO is not set
+
+          # Wi-Fi Monitor & Packet Injection (AR9271, RT2800, MT7612U)
           CONFIG_CFG80211=m
           CONFIG_CFG80211_WEXT=y
           CONFIG_MAC80211=m
@@ -51,63 +55,120 @@ jobs:
           CONFIG_ATH9K_HW=m
           CONFIG_ATH9K_COMMON=m
           CONFIG_ATH9K_HTC=m
+          CONFIG_WLAN_VENDOR_RALINK=y
+          CONFIG_RT2X00=m
+          CONFIG_RT2800USB=m
+          CONFIG_WLAN_VENDOR_MEDIATEK=y
+          CONFIG_MT76x2U=m
+
+          # USB HID / DuckHunter Gadget
+          CONFIG_USB_CONFIGFS_F_HID=m
+
+          # Bluetooth Arsenal (External USB BT Dongles)
+          CONFIG_BT=m
+          CONFIG_BT_BREDR=y
+          CONFIG_BT_RFCOMM=m
+          CONFIG_BT_RFCOMM_TTY=y
+          CONFIG_BT_BNEP=m
+          CONFIG_BT_BNEP_MC_FILTER=y
+          CONFIG_BT_BNEP_PROTO_FILTER=y
+          CONFIG_BT_HIDP=m
+          CONFIG_BT_HCIBTUSB=m
+
+          # CARsenal (CAN Bus) & Hardware Serial Adapters
+          CONFIG_CAN=m
+          CONFIG_CAN_RAW=m
+          CONFIG_CAN_BCM=m
+          CONFIG_CAN_SLCAN=m
+          CONFIG_USB_SERIAL=m
+          CONFIG_USB_SERIAL_CH341=m
+          CONFIG_USB_SERIAL_CP210X=m
+          CONFIG_USB_SERIAL_FTDI_SIO=m
+
+          # RTL-SDR Support
+          CONFIG_MEDIA_SUPPORT=m
+          CONFIG_MEDIA_DIGITAL_TV_SUPPORT=y
+          CONFIG_DVB_USB=m
+          CONFIG_DVB_USB_V2=m
+          CONFIG_DVB_USB_RTL28XXU=m
           EOF
 
-      - name: Build Kernel Modules with Kleaf
+      - name: Build Full Arsenal Kernel Modules with Kleaf
         run: |
           cd ~/gki
-          tools/bazel build --lto=thin //common:kernel_aarch64_dist
+          tools/bazel build --lto=thin --defconfig_fragment=$HOME/full_arsenal.fragment //common:kernel_aarch64_dist
 
-      - name: Download AR9271 Firmware & Package Magisk Module
+      - name: Download Firmware & Package KernelSU/Magisk Module
         run: |
-          mkdir -p ~/magisk_mod/META-INF/com/google/android
-          mkdir -p ~/magisk_mod/modules
-          mkdir -p ~/magisk_mod/system/vendor/firmware/ath9k_htc
+          mkdir -p ~/nh_arsenal/META-INF/com/google/android
+          mkdir -p ~/nh_arsenal/modules
+          mkdir -p ~/nh_arsenal/system/vendor/firmware/ath9k_htc
 
-          # Copy compiled .ko modules
+          # Copy all generated .ko modules from dist
           DIST=~/gki/out/android16-6.12/dist
-          for mod in rfkill.ko cfg80211.ko mac80211.ko ath.ko ath9k_hw.ko ath9k_common.ko ath9k_htc.ko; do
-            [ -f "$DIST/$mod" ] && cp "$DIST/$mod" ~/magisk_mod/modules/
-          done
+          find "$DIST" -maxdepth 1 -name "*.ko" -exec cp {} ~/nh_arsenal/modules/ \;
 
-          # Fetch official AR9271 firmware
+          # Fetch AR9271 & RT2800 firmware blobs
           curl -L https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/ath9k_htc/htc_9271-1.4.0.fw \
-            -o ~/magisk_mod/system/vendor/firmware/htc_9271.fw
-          cp ~/magisk_mod/system/vendor/firmware/htc_9271.fw ~/magisk_mod/system/vendor/firmware/ath9k_htc/htc_9271-1.4.0.fw
+            -o ~/nh_arsenal/system/vendor/firmware/htc_9271.fw
+          cp ~/nh_arsenal/system/vendor/firmware/htc_9271.fw ~/nh_arsenal/system/vendor/firmware/ath9k_htc/htc_9271-1.4.0.fw
+          curl -L https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rt2870.bin \
+            -o ~/nh_arsenal/system/vendor/firmware/rt2870.bin
 
-          # Create Magisk installer scripts
+          # Installer binaries
           curl -L https://raw.githubusercontent.com/topjohnwu/Magisk/master/scripts/module_installer.sh \
-            -o ~/magisk_mod/META-INF/com/google/android/update-binary
-          echo "#MAGISK" > ~/magisk_mod/META-INF/com/google/android/updater-script
+            -o ~/nh_arsenal/META-INF/com/google/android/update-binary
+          echo "#MAGISK" > ~/nh_arsenal/META-INF/com/google/android/updater-script
 
-          cat << 'EOF' > ~/magisk_mod/module.prop
-          id=nethunter_ar9271
-          name=NetHunter Atheros AR9271 (GKI 6.12.38)
+          cat << 'EOF' > ~/nh_arsenal/module.prop
+          id=nethunter_full_arsenal
+          name=NetHunter Full Arsenal (GKI 6.12.38)
           version=1.0
           versionCode=1
           author=Custom
-          description=GKI 6.12.38 cfg80211, mac80211, ath9k_htc modules and firmware for TECNO CL6k
+          description=Wi-Fi Injection, USB HID DuckHunter, Bluetooth Arsenal, CARsenal & SDR modules for TECNO CL6k
           EOF
 
-          cat << 'EOF' > ~/magisk_mod/service.sh
+          # Create loader script used by both service.sh and KernelSU Action button
+          cat << 'EOF' > ~/nh_arsenal/load_arsenal.sh
           #!/system/bin/sh
           MODDIR=${0%/*}
+          echo "[*] Setting firmware path..."
           echo -n "$MODDIR/system/vendor/firmware" > /sys/module/firmware_class/parameters/path
-          insmod $MODDIR/modules/rfkill.ko 2>/dev/null
-          insmod $MODDIR/modules/cfg80211.ko
-          insmod $MODDIR/modules/mac80211.ko
-          insmod $MODDIR/modules/ath.ko
-          insmod $MODDIR/modules/ath9k_hw.ko
-          insmod $MODDIR/modules/ath9k_common.ko
-          insmod $MODDIR/modules/ath9k_htc.ko
+
+          echo "[*] Loading core dependencies..."
+          for mod in rfkill.ko libarc4.ko cfg80211.ko mac80211.ko; do
+            [ -f "$MODDIR/modules/$mod" ] && insmod "$MODDIR/modules/$mod" 2>/dev/null
+          done
+
+          echo "[*] Loading Wi-Fi, HID, Bluetooth, CAN, and SDR modules..."
+          for ko in "$MODDIR"/modules/*.ko; do
+            insmod "$ko" 2>/dev/null
+          done
+
+          echo "[+] All NetHunter Arsenal modules loaded!"
           EOF
-          chmod +x ~/magisk_mod/service.sh
+          chmod +x ~/nh_arsenal/load_arsenal.sh
 
-          cd ~/magisk_mod
-          zip -r ~/nethunter_ar9271_6.12.38.zip .
+          cat << 'EOF' > ~/nh_arsenal/service.sh
+          #!/system/bin/sh
+          MODDIR=${0%/*}
+          sh "$MODDIR/load_arsenal.sh"
+          EOF
+          chmod +x ~/nh_arsenal/service.sh
 
-      - name: Upload Flashable Magisk Module
+          cat << 'EOF' > ~/nh_arsenal/action.sh
+          #!/system/bin/sh
+          MODDIR=${0%/*}
+          sh "$MODDIR/load_arsenal.sh"
+          EOF
+          chmod +x ~/nh_arsenal/action.sh
+
+          cd ~/nh_arsenal
+          zip -r ~/nethunter_full_arsenal_6.12.38.zip .
+
+      - name: Upload Full Arsenal Module Zip
         uses: actions/upload-artifact@v4
         with:
-          name: nethunter_ar9271_6.12.38
-          path: ~/nethunter_ar9271_6.12.38.zip
+          name: nethunter_full_arsenal_6.12.38
+          path: ~/nethunter_full_arsenal_6.12.38.zip
